@@ -10,10 +10,18 @@ from src.core.config import (
     CHUNK_HIGHLIGHT_COLOR, 
     DEFAULT_SENTENCES_PER_CHUNK, 
     DEFAULT_MIN_CHUNK_LENGTH,
-    ALLOWED_EXTENSIONS
+    ALLOWED_EXTENSIONS,
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_CHUNK_OVERLAP,
+    DEFAULT_EMBEDDING_BASE_URL,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE
 )
 from src.chunkers.sentence import SentenceChunker
 from src.chunkers.paragraph import ParagraphChunker
+from src.chunkers.hierarchy import HierarchyChunker
+from src.chunkers.recursive import RecursiveChunker
+from src.chunkers.semantic import SemanticChunker
 
 
 # Session State Init
@@ -27,6 +35,9 @@ converter = ConverterManager(storage)
 chunker_mgr = ChunkerManager(storage)
 chunker_mgr.register_chunker(SentenceChunker())
 chunker_mgr.register_chunker(ParagraphChunker())
+chunker_mgr.register_chunker(HierarchyChunker())
+chunker_mgr.register_chunker(RecursiveChunker())
+chunker_mgr.register_chunker(SemanticChunker())
 
 def render_tree(path: Path, prefix: str = "") -> str:
     """Helper to render a filesystem tree as a string."""
@@ -215,13 +226,23 @@ with main_tab1:
                         conv_files = [f.name for f in converted_dir.glob("*.md")]
                         if conv_files:
                             selected_conv_to_chunk = st.selectbox("Select Conversion for Chunking", conv_files)
-                            chunker_type = st.selectbox("Select Chunker", ["sentence_v1", "paragraph_v1"])
+                            chunker_type = st.selectbox("Select Chunker", ["sentence_v1", "paragraph_v1", "hierarchy_v1", "recursive_v1", "semantic_v1"])
                             
                             config = {}
                             if chunker_type == "sentence_v1":
                                 config["sentences_per_chunk"] = st.number_input("Sentences per chunk", 1, 100, DEFAULT_SENTENCES_PER_CHUNK)
                             elif chunker_type == "paragraph_v1":
                                 config["min_length"] = st.number_input("Min chunk length (chars)", 10, 5000, DEFAULT_MIN_CHUNK_LENGTH)
+                            elif chunker_type == "hierarchy_v1":
+                                config["max_chunk_size"] = st.number_input("Max chunk size", 100, 10000, 2000)
+                                config["include_path"] = st.checkbox("Include Context Path", value=True)
+                            elif chunker_type == "recursive_v1":
+                                config["chunk_size"] = st.number_input("Chunk Size", 100, 5000, DEFAULT_CHUNK_SIZE)
+                                config["chunk_overlap"] = st.number_input("Chunk Overlap", 0, 1000, DEFAULT_CHUNK_OVERLAP)
+                            elif chunker_type == "semantic_v1":
+                                config["base_url"] = st.text_input("API Base URL", DEFAULT_EMBEDDING_BASE_URL)
+                                config["model_name"] = st.text_input("Embedding Model", DEFAULT_EMBEDDING_MODEL)
+                                config["threshold_percentile"] = st.number_input("Split Threshold (Percentile)", 50, 99, DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE)
                             
                             if st.button("Run Chunking"):
                                 with st.spinner("Chunking..."):
@@ -342,13 +363,23 @@ with main_tab_batch:
 
         with col_b2:
             st.write("#### ✂️ Batch Chunking")
-            b_chunker_type = st.selectbox("Chunker:", ["sentence_v1", "paragraph_v1"], key="batch_chunk_type")
+            b_chunker_type = st.selectbox("Chunker:", ["sentence_v1", "paragraph_v1", "hierarchy_v1", "recursive_v1", "semantic_v1"], key="batch_chunk_type")
             
             b_config = {}
             if b_chunker_type == "sentence_v1":
                 b_config["sentences_per_chunk"] = st.number_input("Sentences per chunk", 1, 100, DEFAULT_SENTENCES_PER_CHUNK, key="b_sent")
             elif b_chunker_type == "paragraph_v1":
                 b_config["min_length"] = st.number_input("Min chunk length (chars)", 10, 5000, DEFAULT_MIN_CHUNK_LENGTH, key="b_para")
+            elif b_chunker_type == "hierarchy_v1":
+                b_config["max_chunk_size"] = st.number_input("Max chunk size", 100, 10000, 2000, key="b_hier")
+                b_config["include_path"] = True
+            elif b_chunker_type == "recursive_v1":
+                b_config["chunk_size"] = st.number_input("Chunk Size", 100, 5000, DEFAULT_CHUNK_SIZE, key="b_rec_size")
+                b_config["chunk_overlap"] = st.number_input("Chunk Overlap", 0, 1000, DEFAULT_CHUNK_OVERLAP, key="b_rec_over")
+            elif b_chunker_type == "semantic_v1":
+                b_config["base_url"] = st.text_input("API Base URL", DEFAULT_EMBEDDING_BASE_URL, key="b_sem_url")
+                b_config["model_name"] = st.text_input("Embedding Model", DEFAULT_EMBEDDING_MODEL, key="b_sem_model")
+                b_config["threshold_percentile"] = st.number_input("Split Threshold (Percentile)", 50, 99, DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE, key="b_sem_thresh")
             
             if st.button("🚀 Chunk All Conversions", width="stretch"):
                 docs = storage.list_documents(category)
