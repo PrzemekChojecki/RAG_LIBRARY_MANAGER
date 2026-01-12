@@ -8,6 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-data
-archive
-sample_docs
+data/
+archive/
+sample_docs/
