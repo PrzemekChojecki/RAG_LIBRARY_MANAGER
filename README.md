@@ -19,6 +19,18 @@ A professional document management system designed to streamline the ingestion, 
 - **Batch Processing**: Mass conversion and chunking for entire catalogs with one click and progress tracking.
 - **Global Status Explorer**: Detailed, collapsible overview of all artifacts and processing states across the entire repository.
 
+## 🧩 Chunking Strategies
+
+The library implements a variety of chunking strategies to suit different document types and retrieval needs:
+
+| Strategy | ID | Description | Best For |
+|----------|----|-------------|----------|
+| **Sentence** | `sentence_v1` | Splits text into fixed windows of sentences (e.g., 5 sentences per chunk). | Granular retrieval where specific statements matter. |
+| **Paragraph** | `paragraph_v1` | Preserves natural document structure by keeping paragraphs intact. | General prose, articles, where flow matters. |
+| **Hierarchy** | `hierarchy_v1` | Splits based on Markdown headers and **injects the header path** (e.g., `Title > Chapter 1`) into the chunk content. | Structured documents (legal, technical, manuals). |
+| **Recursive** | `recursive_v1` | Recursively splits by separators (`\n\n`, `\n`, space) to fit a strict character limit. Supports **Overlap**. | The "Gold Standard" for general RAG; balances size and context. |
+| **Semantic** | `semantic_v1` | Uses an embedding model to detect topic shifts (based on cosine similarity) and splits text where the meaning changes. | Long narratives or complex docs where topics shift fluidly. |
+
 ## 🛠️ Tech Stack
 
 - **Frontend**: [Streamlit](https://streamlit.io/)
