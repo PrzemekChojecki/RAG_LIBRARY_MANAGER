@@ -1,0 +1,14 @@
+[project]
+name = "rag-library-manager"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "markitdown[pdf,docx]>=0.1.4",
+    "pydantic>=2.12.5",
+    "pymupdf4llm>=0.2.9",
+    "python-docx>=1.2.0",
+    "streamlit>=1.52.2",
+    "pymupdf-layout",
+]
