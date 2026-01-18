@@ -26,6 +26,7 @@ from src.chunkers.paragraph import ParagraphChunker
 from src.chunkers.hierarchy import HierarchyChunker
 from src.chunkers.recursive import RecursiveChunker
 from src.chunkers.semantic import SemanticChunker
+from src.ui.styles import apply_custom_styles, render_styled_sources
 import json
 
 # Session State Init
@@ -60,10 +61,11 @@ def render_tree(path: Path, prefix: str = "") -> str:
             tree += render_tree(item, prefix + extension)
     return tree
 
-st.set_page_config(page_title="RAG Library Manager", layout="wide")
+st.set_page_config(page_title="RAG Manager", layout="wide")
+apply_custom_styles()
 
-st.title("📚 RAG Library Manager")
-st.markdown("Automated Document Ingestion & Chunking Pipeline")
+st.title("📚 RAG Manager")
+# st.markdown("Automated Document Ingestion & Chunking Pipeline")
 
 # Top-level Navigation
 main_tab1, main_tab_batch, main_tab_vec, main_tab2, main_tab_chat, main_tab_cache = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📦 Vector Storage", "📁 Global Explorer", "💬 Chatbot", "📂 Cached Sets"])
@@ -543,16 +545,6 @@ with main_tab_chat:
                 for idx, message in enumerate(st.session_state.messages):
                     with st.chat_message(message["role"]):
                         st.markdown(message["content"])
-                        if message.get("sources"):
-                            with st.expander("🔍 View Sources"):
-                                for s in message["sources"]:
-                                    score_val = s.get('score', 0)
-                                    st.write(f"**Doc:** {s['doc_name']} (ID: {s['id']}) | Score: {score_val:.4f}")
-                                    if s.get('summary'):
-                                        st.write(f"_Summary:_ {s['summary']}")
-                                    st.markdown("**Pełna treść fragmentu:**")
-                                    st.code(s['text'], language="markdown")
-                        
                         # Feedback buttons for assistant messages
                         if message["role"] == "assistant" and "state_hash" in message:
                             f_col1, f_col2, f_col3, _ = st.columns([1, 1, 1, 7])
@@ -565,6 +557,10 @@ with main_tab_chat:
                                 if st.button("👎", key=f"down_{idx}"):
                                     rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "down")
                                     st.toast("Głos oddany (negatywny).")
+                            
+                            # Use custom source renderer
+                            if message.get("sources"):
+                                render_styled_sources(message["sources"])
 
             # Chat Input (Pinned to bottom by Streamlit)
             if user_query := st.chat_input("Ask a question about your documents..."):
@@ -603,16 +599,9 @@ with main_tab_chat:
                         # Final update without cursor
                         response_placeholder.markdown(full_answer)
                         
-                        # Show sources at bottom of message
+                        # Show sources at bottom of message using custom renderer
                         if sources:
-                            with st.expander("🔍 View Sources"):
-                                for s in sources:
-                                    score_val = s.get('score', 0)
-                                    st.write(f"**Doc:** {s['doc_name']} (ID: {s['id']}) | Score: {score_val:.4f}")
-                                    if s.get('summary'):
-                                        st.write(f"_Summary:_ {s['summary']}")
-                                    st.markdown("**Pełna treść fragmentu:**")
-                                    st.code(s['text'], language="markdown")
+                            render_styled_sources(sources)
                         
                         # Store in history
                         st.session_state.messages.append({
