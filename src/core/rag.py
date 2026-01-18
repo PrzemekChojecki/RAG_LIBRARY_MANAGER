@@ -49,7 +49,7 @@ class RAGManager:
         
         return "\n\n---\n\n".join(context_parts)
 
-    def answer_question_stream(self, category: str, collection_name: str, query: str, top_k: int = 3, cache_filter_mode: str = "only_positive"):
+    def answer_question_stream(self, category: str, collection_name: str, query: str, top_k: int = 3, cache_filter_mode: str = "only_positive", model: str = DEFAULT_LLM_MODEL, temperature: float = 0.2, max_tokens: int = 1000):
         """Performs search and returns a generator for streaming the answer."""
         
         # 1. Load context state
@@ -59,6 +59,7 @@ class RAGManager:
                 prompt_content = f.read()
         
         col_metadata = self._get_collection_metadata(category, collection_name)
+        # Note: we might want to include model/temp in state hash if we want separate cache for different settings
         state_hash = self.cache.get_state_hash(category, collection_name, col_metadata, prompt_content)
         
         # Yield state_hash first for UI feedback logic
@@ -91,9 +92,10 @@ class RAGManager:
         try:
             # 6. Call LLM with streaming
             stream = self.llm_client.chat.completions.create(
-                model=DEFAULT_LLM_MODEL,
+                model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.2,
+                temperature=temperature,
+                max_tokens=max_tokens,
                 stream=True
             )
             
@@ -106,7 +108,7 @@ class RAGManager:
             
             # 7. Save to Cache
             if CACHE_ENABLED:
-                self.cache.save_to_cache(query, full_answer, hits, state_hash, category, collection_name, prompt_content)
+                self.cache.save_to_cache(query, full_answer, hits, state_hash, category, collection_name, prompt_content, model_name=model)
 
             # Send sources at the end
             yield {"type": "sources", "content": hits}

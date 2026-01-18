@@ -36,6 +36,12 @@ DEFAULT_ENRICH_API_KEY = "not_applicable"
 DEFAULT_ENRICH_MODEL = "bielik-4.5b-v3.0-instruct"
 DEFAULT_ENRICH_MAX_CHARS = 180
 
+AVAILABLE_LLM_MODELS = [
+    "bielik-4.5b-v3.0-instruct",
+    "mistralai/ministral-3-14b-reasoning",
+    "gpt-oss-20b"
+]
+
 # RAG Cache & Quality Settings
 RAG_CACHE_DB = DATA_ROOT / "rag_cache.db"
 CACHE_SIMILARITY_THRESHOLD = 0.95  # How similar query must be to hit cache

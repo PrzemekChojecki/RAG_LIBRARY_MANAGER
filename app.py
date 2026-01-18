@@ -17,7 +17,9 @@ from src.core.config import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_MODEL,
-    DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE
+    DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE,
+    DEFAULT_LLM_MODEL,
+    AVAILABLE_LLM_MODELS
 )
 from src.chunkers.sentence import SentenceChunker
 from src.chunkers.paragraph import ParagraphChunker
@@ -517,6 +519,18 @@ with main_tab_chat:
             
             st.markdown("---")
             
+            # LLM Generation Settings
+            with st.expander("⚙️ LLM Generation Settings"):
+                set_col1, set_col2, set_col3 = st.columns(3)
+                with set_col1:
+                    sel_model = st.selectbox("LLM Model", AVAILABLE_LLM_MODELS, index=AVAILABLE_LLM_MODELS.index(DEFAULT_LLM_MODEL) if DEFAULT_LLM_MODEL in AVAILABLE_LLM_MODELS else 0)
+                with set_col2:
+                    sel_temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
+                with set_col3:
+                    sel_max_tokens = st.slider("Max Tokens", 256, 4096, 1000, 256)
+            
+            st.markdown("---")
+            
             # Chat Container for messages
             chat_container = st.container()
 
@@ -568,7 +582,16 @@ with main_tab_chat:
                         current_state_hash = ""
                         
                         with st.spinner("Searching and thinking..."):
-                            for part in rag_mgr.answer_question_stream(category, selected_col_chat, user_query, top_k=top_k, cache_filter_mode=filter_val):
+                            for part in rag_mgr.answer_question_stream(
+                                category, 
+                                selected_col_chat, 
+                                user_query, 
+                                top_k=top_k, 
+                                cache_filter_mode=filter_val,
+                                model=sel_model,
+                                temperature=sel_temp,
+                                max_tokens=sel_max_tokens
+                            ):
                                 if part["type"] == "state":
                                     current_state_hash = part["content"]
                                 elif part["type"] == "answer":
@@ -629,7 +652,7 @@ with main_tab_cache:
             status_text = f":{score_color}[{row['thumbs_up']} 👍 / {row['thumbs_down']} 👎] | :blue[{hits} 🎯]"
             
             with st.expander(f"{status_text} [{row['created_at']}] {row['query'][:60]}..."):
-                st.write(f"**Category:** {row['category']} | **Collection:** {row['collection_name']}")
+                st.write(f"**Category:** {row['category']} | **Collection:** {row['collection_name']} | **Model:** `{row.get('model_name', 'N/A')}`")
                 st.write("**Query:**")
                 st.write(row['query'])
                 st.write("**Answer:**")

@@ -30,6 +30,7 @@ class RAGCache:
                 category TEXT,
                 collection_name TEXT,
                 prompt_content TEXT,
+                model_name TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -45,6 +46,8 @@ class RAGCache:
             cursor.execute('ALTER TABLE rag_cache ADD COLUMN thumbs_down INTEGER DEFAULT 0')
         if 'hit_count' not in columns:
             cursor.execute('ALTER TABLE rag_cache ADD COLUMN hit_count INTEGER DEFAULT 0')
+        if 'model_name' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN model_name TEXT')
             
         # Drop old unused columns if they exist
         for col_to_drop in ['feedback', 'rating_comment']:
@@ -108,15 +111,15 @@ class RAGCache:
         conn.close()
         return None
 
-    def save_to_cache(self, query: str, answer: str, sources: List[Dict[str, Any]], state_hash: str, category: str, collection_name: str, prompt_content: str):
+    def save_to_cache(self, query: str, answer: str, sources: List[Dict[str, Any]], state_hash: str, category: str, collection_name: str, prompt_content: str, model_name: str = ""):
         """Saves a new interaction to the cache."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO rag_cache (query, answer, sources, state_hash, category, collection_name, prompt_content)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (query.strip(), answer, json.dumps(sources), state_hash, category, collection_name, prompt_content))
+            INSERT INTO rag_cache (query, answer, sources, state_hash, category, collection_name, prompt_content, model_name)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (query.strip(), answer, json.dumps(sources), state_hash, category, collection_name, prompt_content, model_name))
         
         conn.commit()
         conn.close()
