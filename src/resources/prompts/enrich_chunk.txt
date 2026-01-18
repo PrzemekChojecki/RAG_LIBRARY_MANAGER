@@ -1,0 +1,16 @@
+Przeanalizuj poniższy fragment tekstu (chunk) i przygotuj:
+1. Zwięzłe podsumowanie merytoryczne (maksymalnie {{max_chars}} znaków).
+2. 2-3 tagi (słowa kluczowe) opisujące tematykę fragmentu.
+
+Zwróć odpowiedź w formacie JSON:
+{
+  "summary": "treść podsumowania",
+  "tags": ["tag1", "tag2", "tag3"]
+}
+
+Tekst do analizy:
+{{chunk_text}}
+
+WAŻNE: Zwróć odpowiedź w formacie JSON, bez dodatkowych znaków.
+WAŻNE: Nie dodawaj żadnych dodatkowych znaków do odpowiedzi.
+WAŻNE: Udzielaj odpowiedzi w języku polskim.

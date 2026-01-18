@@ -2,11 +2,13 @@ from typing import List, Dict, Any
 import re
 import numpy as np
 from openai import OpenAI
+import httpx
 from ..core.chunker_manager import ChunkerBase
 from ..core.config import (
     DEFAULT_CHUNKER_VERSION, 
     DEFAULT_EMBEDDING_BASE_URL, 
     DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_EMBEDDING_API_KEY,
     DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE
 )
 
@@ -47,7 +49,11 @@ class SemanticChunker(ChunkerBase):
             }
 
         # 2. Get embeddings
-        client = OpenAI(base_url=base_url, api_key="lm-studio") # dummy key for local
+        client = OpenAI(
+            base_url=base_url, 
+            api_key=DEFAULT_EMBEDDING_API_KEY,
+            http_client=httpx.Client(verify=False)
+        )
         
         try:
             # Batch sentences for embedding

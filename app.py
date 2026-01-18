@@ -6,6 +6,8 @@ from src.core.storage import StorageManager
 from src.core.ingest import IngestManager
 from src.core.converter import ConverterManager
 from src.core.chunker_manager import ChunkerManager
+from src.core.vector_store import VectorStoreManager
+from src.core.rag import RAGManager
 from src.core.config import (
     CHUNK_HIGHLIGHT_COLOR, 
     DEFAULT_SENTENCES_PER_CHUNK, 
@@ -22,7 +24,7 @@ from src.chunkers.paragraph import ParagraphChunker
 from src.chunkers.hierarchy import HierarchyChunker
 from src.chunkers.recursive import RecursiveChunker
 from src.chunkers.semantic import SemanticChunker
-
+import json
 
 # Session State Init
 if "uploader_key" not in st.session_state:
@@ -38,6 +40,9 @@ chunker_mgr.register_chunker(ParagraphChunker())
 chunker_mgr.register_chunker(HierarchyChunker())
 chunker_mgr.register_chunker(RecursiveChunker())
 chunker_mgr.register_chunker(SemanticChunker())
+
+vector_mgr = VectorStoreManager(storage)
+rag_mgr = RAGManager(vector_mgr)
 
 def render_tree(path: Path, prefix: str = "") -> str:
     """Helper to render a filesystem tree as a string."""
@@ -59,7 +64,7 @@ st.title("📚 RAG Library Manager")
 st.markdown("Automated Document Ingestion & Chunking Pipeline")
 
 # Top-level Navigation
-main_tab1, main_tab_batch, main_tab2 = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📁 Global Explorer"])
+main_tab1, main_tab_batch, main_tab_vec, main_tab2, main_tab_chat, main_tab_cache = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📦 Vector Storage", "📁 Global Explorer", "💬 Chatbot", "📂 Cached Sets"])
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -405,6 +410,252 @@ with main_tab_batch:
                     st.rerun()
     else:
         st.info("Select a catalog in the sidebar to use batch processing.")
+
+with main_tab_vec:
+    st.write("### 📦 Vector Storage (FAISS)")
+    
+    if category:
+        st.info(f"Managing Vector Collections for: **{category}**")
+        
+        v_col1, v_col2 = st.columns([2, 3])
+        
+        with v_col1:
+            st.write("#### 🆕 Create New Collection")
+            new_col_name = st.text_input("Collection Name", placeholder="e.g. documentation_v1")
+            
+            # Select which chunks to include
+            docs = storage.list_documents(category)
+            selected_chunks_to_include = []
+            
+            st.write("**Select Chunks to Index:**")
+            for d in docs:
+                chunk_dir = storage.get_document_dir(category, d) / "chunked"
+                if chunk_dir.exists():
+                    chunk_files = [f.name for f in chunk_dir.glob("*.md")]
+                    if chunk_files:
+                        # For now, let's just pick the latest chunk run for each doc or allow selecting
+                        # To keep it simple, we'll offer a multiselect for each doc's chunk runs
+                        selected = st.multiselect(f"Chunks for {d}:", chunk_files, key=f"v_sel_{d}")
+                        for s in selected:
+                            selected_chunks_to_include.append((d, s))
+            
+            enrich_enabled = st.checkbox("Enrich chunks (LLM summary + tags)", value=False)
+            v_model = st.text_input("Embedding Model", DEFAULT_EMBEDDING_MODEL, key="v_model")
+            
+            if st.button("🚀 Create Collection", width="stretch", type="primary"):
+                if not new_col_name:
+                    st.error("Please enter a collection name.")
+                elif not selected_chunks_to_include:
+                    st.error("Please select at least one chunk file to index.")
+                else:
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    def update_progress(current, total):
+                        percent = current / total
+                        progress_bar.progress(percent)
+                        status_text.text(f"Enriching chunk {current} of {total}...")
+
+                    with st.spinner("Generating embeddings and creating index... (this may take a while)"):
+                        success, msg = vector_mgr.create_collection(
+                            category, 
+                            new_col_name, 
+                            selected_chunks_to_include, 
+                            v_model, 
+                            enrich=enrich_enabled,
+                            progress_callback=update_progress if enrich_enabled else None
+                        )
+                        if success:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+                            
+        with v_col2:
+            st.write("#### 📋 Existing Collections")
+            collections = vector_mgr.list_collections(category)
+            
+            if collections:
+                for col in collections:
+                    with st.expander(f"📦 {col}"):
+                        col_path = storage.root_path / category / "_vector_stores" / col
+                        meta_path = col_path / "metadata.json"
+                        if meta_path.exists():
+                            with open(meta_path, "r", encoding="utf-8") as f:
+                                meta = json.load(f)
+                            st.write(f"**Model:** `{meta['model']}`")
+                            st.write(f"**Chunks:** {meta['num_chunks']}")
+                            st.write(f"**Created:** {meta['created_at']}")
+                            
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                if st.button("🗑️ Delete", key=f"del_v_{col}"):
+                                    vector_mgr.delete_collection(category, col)
+                                    st.rerun()
+                            with c2:
+                                # Feature for later: query test
+                                pass
+            else:
+                st.info("No collections found for this category.")
+    else:
+        st.info("Select a catalog in the sidebar to manage vector storage.")
+
+with main_tab_chat:
+    if category:
+        collections = vector_mgr.list_collections(category)
+        if collections:
+            # Top-level selectors (ChatGPT style: chat occupies the main area)
+            chat_col1, chat_col2, chat_col3 = st.columns([2, 1, 1])
+            with chat_col1:
+                selected_col_chat = st.selectbox("Select Vector Collection", collections, key="chat_col_sel")
+            with chat_col2:
+                top_k = st.slider("Context chunks (Top-K)", 1, 10, 3, key="chat_topk")
+            with chat_col3:
+                cache_mode = st.radio("Cache Mode", ["Only Positive", "Positive > Negative"], index=0, key="cache_filter")
+                cache_mode_map = {"Only Positive": "only_positive", "Positive > Negative": "pos_gt_neg"}
+                filter_val = cache_mode_map[cache_mode]
+            
+            st.markdown("---")
+            
+            # Chat Container for messages
+            chat_container = st.container()
+
+            # Initialize chat history
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+
+            # Display historical messages in the container
+            with chat_container:
+                for idx, message in enumerate(st.session_state.messages):
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+                        if message.get("sources"):
+                            with st.expander("🔍 View Sources"):
+                                for s in message["sources"]:
+                                    score_val = s.get('score', 0)
+                                    st.write(f"**Doc:** {s['doc_name']} (ID: {s['id']}) | Score: {score_val:.4f}")
+                                    if s.get('summary'):
+                                        st.write(f"_Summary:_ {s['summary']}")
+                                    st.markdown("**Pełna treść fragmentu:**")
+                                    st.code(s['text'], language="markdown")
+                        
+                        # Feedback buttons for assistant messages
+                        if message["role"] == "assistant" and "state_hash" in message:
+                            f_col1, f_col2, f_col3, _ = st.columns([1, 1, 1, 7])
+                            # We can't easily show real-time count without re-querying DB, but we can show what was saved
+                            with f_col1:
+                                if st.button("👍", key=f"up_{idx}"):
+                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "up")
+                                    st.toast("Głos oddany (pozytywny)!")
+                            with f_col2:
+                                if st.button("👎", key=f"down_{idx}"):
+                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "down")
+                                    st.toast("Głos oddany (negatywny).")
+
+            # Chat Input (Pinned to bottom by Streamlit)
+            if user_query := st.chat_input("Ask a question about your documents..."):
+                # 1. Display User Message in container
+                st.session_state.messages.append({"role": "user", "content": user_query})
+                with chat_container:
+                    with st.chat_message("user"):
+                        st.markdown(user_query)
+
+                    # 2. Display Assistant Placeholder and Stream in container
+                    with st.chat_message("assistant"):
+                        response_placeholder = st.empty()
+                        full_answer = ""
+                        sources = []
+                        current_state_hash = ""
+                        
+                        with st.spinner("Searching and thinking..."):
+                            for part in rag_mgr.answer_question_stream(category, selected_col_chat, user_query, top_k=top_k, cache_filter_mode=filter_val):
+                                if part["type"] == "state":
+                                    current_state_hash = part["content"]
+                                elif part["type"] == "answer":
+                                    full_answer += part["content"]
+                                    response_placeholder.markdown(full_answer + "▌")
+                                elif part["type"] == "sources":
+                                    sources = part["content"]
+                        
+                        # Final update without cursor
+                        response_placeholder.markdown(full_answer)
+                        
+                        # Show sources at bottom of message
+                        if sources:
+                            with st.expander("🔍 View Sources"):
+                                for s in sources:
+                                    score_val = s.get('score', 0)
+                                    st.write(f"**Doc:** {s['doc_name']} (ID: {s['id']}) | Score: {score_val:.4f}")
+                                    if s.get('summary'):
+                                        st.write(f"_Summary:_ {s['summary']}")
+                                    st.markdown("**Pełna treść fragmentu:**")
+                                    st.code(s['text'], language="markdown")
+                        
+                        # Store in history
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": full_answer,
+                            "sources": sources,
+                            "state_hash": current_state_hash
+                        })
+                st.rerun()
+            
+            # Button for clearing
+            if st.button("🗑️ Clear Chat History"):
+                st.session_state.messages = []
+                st.rerun()
+
+        else:
+            st.warning("No vector collections found. Please create one in 'Vector Storage' tab first.")
+    else:
+        st.info("Select a catalog in the sidebar to start chatting.")
+
+with main_tab_cache:
+    st.write("### 📂 Cached Interaction Sets")
+    
+    cached_data = rag_mgr.cache.list_cache()
+    
+    if not cached_data:
+        st.info("No interactions recorded in cache yet.")
+    else:
+        # Summary statistics
+        st.write(f"Total entries: {len(cached_data)}")
+        
+        for idx, row in enumerate(cached_data):
+            # Format feedback summary
+            score = row['thumbs_up'] - row['thumbs_down']
+            score_color = "green" if score > 0 else ("red" if score < 0 else "gray")
+            hits = row.get('hit_count', 0)
+            status_text = f":{score_color}[{row['thumbs_up']} 👍 / {row['thumbs_down']} 👎] | :blue[{hits} 🎯]"
+            
+            with st.expander(f"{status_text} [{row['created_at']}] {row['query'][:60]}..."):
+                st.write(f"**Category:** {row['category']} | **Collection:** {row['collection_name']}")
+                st.write("**Query:**")
+                st.write(row['query'])
+                st.write("**Answer:**")
+                st.write(row['answer'])
+                
+                st.write("**Sources:**")
+                try:
+                    sources = json.loads(row['sources'])
+                    for s in sources:
+                        st.write(f"- {s.get('doc_name')} (ID: {s.get('id')})")
+                except:
+                    st.write("Error loading sources metadata.")
+                
+                with st.expander("🛠️ Metadata & Prompt"):
+                    st.code(f"State Hash: {row['state_hash']}", language=None)
+                    st.write("**System Prompt Version:**")
+                    st.code(row['prompt_content'], language="markdown")
+                
+                with st.expander("📊 Raw Data"):
+                    st.json(row)
+                
+                # Delete button
+                if st.button(f"🗑️ Delete Entry", key=f"del_cache_{row['id']}"):
+                    rag_mgr.cache.delete_cache_entry(row['id'])
+                    st.success("Entry deleted.")
+                    st.rerun()
 
 with main_tab2:
     st.write("### 📁 Global Status Explorer")

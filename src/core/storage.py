@@ -46,7 +46,7 @@ class StorageManager:
         cat_dir = self.root_path / category
         if not cat_dir.exists():
             return []
-        return [d.name for d in cat_dir.iterdir() if d.is_dir()]
+        return [d.name for d in cat_dir.iterdir() if d.is_dir() and not d.name.startswith("_")]
 
     def delete_file(self, file_path: Path):
         if file_path.exists():

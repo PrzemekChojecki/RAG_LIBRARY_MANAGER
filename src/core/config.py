@@ -23,5 +23,20 @@ DEFAULT_CHUNK_OVERLAP = 200
 
 # Embedding Settings
 DEFAULT_EMBEDDING_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_EMBEDDING_API_KEY = "not_applicable"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-embeddinggemma-300m-qat"
 DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE = 90
+
+DEFAULT_LLM_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_LLM_API_KEY = "not_applicable"
+DEFAULT_LLM_MODEL = "bielik-4.5b-v3.0-instruct"
+
+DEFAULT_ENRICH_BASE_URL = "http://127.0.0.1:1234/v1"
+DEFAULT_ENRICH_API_KEY = "not_applicable"
+DEFAULT_ENRICH_MODEL = "bielik-4.5b-v3.0-instruct"
+DEFAULT_ENRICH_MAX_CHARS = 180
+
+# RAG Cache & Quality Settings
+RAG_CACHE_DB = DATA_ROOT / "rag_cache.db"
+CACHE_SIMILARITY_THRESHOLD = 0.95  # How similar query must be to hit cache
+CACHE_ENABLED = True
