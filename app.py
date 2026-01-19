@@ -15,12 +15,20 @@ from src.core.config import (
     ALLOWED_EXTENSIONS,
     DEFAULT_CHUNK_SIZE,
     DEFAULT_CHUNK_OVERLAP,
-    DEFAULT_EMBEDDING_BASE_URL,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_SEMANTIC_THRESHOLD_PERCENTILE,
     DEFAULT_LLM_MODEL,
-    AVAILABLE_LLM_MODELS
+    AVAILABLE_LLM_MODELS,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_CHAT_TOP_K,
+    DEFAULT_USE_MAGIC_REWRITE,
+    DEFAULT_USE_RERANKER,
+    DEFAULT_RERANK_TOP_N,
+    CACHE_ENABLED,
+    CACHE_SIMILARITY_THRESHOLD,
+    DEFAULT_CACHE_MODE
 )
+
 from src.chunkers.sentence import SentenceChunker
 from src.chunkers.paragraph import ParagraphChunker
 from src.chunkers.hierarchy import HierarchyChunker
@@ -36,14 +44,36 @@ if "uploader_key" not in st.session_state:
 if "prompt_reset_counter" not in st.session_state:
     st.session_state.prompt_reset_counter = 0
 
-# Initialize prompt state if not present
+# Initialize prompt state
 if "live_prompts" not in st.session_state:
     st.session_state.live_prompts = {}
-    prompt_dir = Path("src/resources/prompts")
-    if prompt_dir.exists():
-        for p_file in prompt_dir.glob("*.txt"):
+
+prompt_dir = Path("src/resources/prompts")
+if prompt_dir.exists():
+    for p_file in prompt_dir.glob("*.txt"):
+        if p_file.name not in st.session_state.live_prompts:
             with open(p_file, "r", encoding="utf-8") as f:
                 st.session_state.live_prompts[p_file.name] = f.read()
+
+# Initialize AI Settings in session state for persistence
+if "chat_topk" not in st.session_state:
+    st.session_state.chat_topk = DEFAULT_CHAT_TOP_K
+if "use_magic_rewrite" not in st.session_state:
+    st.session_state.use_magic_rewrite = DEFAULT_USE_MAGIC_REWRITE
+if "use_rerank" not in st.session_state:
+    st.session_state.use_rerank = DEFAULT_USE_RERANKER
+if "rerank_n" not in st.session_state:
+    st.session_state.rerank_n = DEFAULT_RERANK_TOP_N
+if "cache_threshold" not in st.session_state:
+    st.session_state.cache_threshold = CACHE_SIMILARITY_THRESHOLD
+if "cache_enabled" not in st.session_state:
+    st.session_state.cache_enabled = CACHE_ENABLED
+if "cache_filter" not in st.session_state:
+    st.session_state.cache_filter = DEFAULT_CACHE_MODE
+if "sel_model" not in st.session_state:
+    st.session_state.sel_model = DEFAULT_LLM_MODEL
+if "sel_temp" not in st.session_state:
+    st.session_state.sel_temp = DEFAULT_TEMPERATURE
 
 # Initialize Managers
 storage = StorageManager()
@@ -77,10 +107,10 @@ st.set_page_config(page_title="RAG Manager", layout="wide")
 apply_custom_styles()
 
 st.title("📚 RAG Manager")
-# st.markdown("Automated Document Ingestion & Chunking Pipeline")
 
-# Top-level Navigation
-main_tab1, main_tab_batch, main_tab2, main_tab_vec, main_tab_chat, main_tab_cache = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📁 Global Explorer", "📦 Vector Storage", "💬 Chatbot", "📂 Cached Sets"])
+# Top-level Navigation with Radio for contextual sidebar support
+tab_names = ["🚀 Pipeline", "⚙️ Batch Process", "📁 Global Explorer", "📦 Vector Storage", "💬 Chatbot", "📂 Cached Sets"]
+selected_tab = st.radio("Navigation", tab_names, horizontal=True, label_visibility="collapsed")
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -102,7 +132,64 @@ with st.sidebar:
     else:
         category = selected_cat
 
-with main_tab1:
+    if selected_tab in ["💬 Chatbot", "📂 Cached Sets"]:
+        st.markdown("---")
+        st.header("🤖 AI Settings")
+        
+        # Context & Retrieval Settings
+        st.write("**Retrieval**")
+        top_k = st.slider("Context chunks (Top-K)", 2, 10, key="chat_topk")
+        
+        use_rewrite = st.toggle("Magic Rewrite", key="use_magic_rewrite", help="Poprawia zapytanie przed wyszukiwaniem")
+        use_rerank = st.toggle("Enable Reranker", key="use_rerank")
+        if use_rerank:
+            rerank_n = st.slider("Rerank Top-N", 1, top_k, min(top_k, DEFAULT_RERANK_TOP_N), key="rerank_n")
+        else:
+            rerank_n = min(top_k, DEFAULT_RERANK_TOP_N)
+
+        cache_enabled = st.toggle("Enable Cache", key="cache_enabled")
+        if cache_enabled:
+            cache_mode = st.radio("Cache Mode", ["Only Positive", "Positive > Negative"], key="cache_filter")
+            cache_threshold = st.slider("Cache Similarity Threshold", 0.65, 1.00, CACHE_SIMILARITY_THRESHOLD, step=0.01, key="cache_threshold", help="Min similarity to hit cache. 1.0 = Exact match.")
+            cache_mode_map = {"Only Positive": "only_positive", "Positive > Negative": "pos_gt_neg"}
+            filter_val = cache_mode_map[cache_mode]
+        else:
+            filter_val = "only_positive" # not used but needs to be defined
+            cache_threshold = 1.0
+        
+        st.write("**Generation**")
+        sel_model = st.selectbox("LLM Model", AVAILABLE_LLM_MODELS, key="sel_model")
+        sel_temp = st.slider("Temperature", 0.0, 1.0, step=0.05, key="sel_temp")
+        sel_max_tokens = 2048 # Default fixed value
+        
+        with st.popover("📜 Edit Prompts", use_container_width=True, type="primary"):
+            st.write("### 📜 System Prompts (Live Edit)")
+            st.info("Zmiany tutaj są tymczasowe (nie zapisują się na dysku).")
+            
+            prompt_files = sorted(list(st.session_state.live_prompts.keys()))
+            if prompt_files:
+                for p_name in prompt_files:
+                    with st.expander(f"📄 {p_name}"):
+                        widget_key = f"edit_prompt_{p_name}_{st.session_state.prompt_reset_counter}"
+                        edited_val = st.text_area(
+                            f"Edit {p_name}", 
+                            value=st.session_state.live_prompts[p_name], 
+                            height=500,
+                            key=widget_key
+                        )
+                        st.session_state.live_prompts[p_name] = edited_val
+                        
+                        if st.button(f"🔄 Przywróć fabryczny: {p_name}", key=f"reset_{p_name}"):
+                            p_path = Path("src/resources/prompts") / p_name
+                            if p_path.exists():
+                                with open(p_path, "r", encoding="utf-8") as f:
+                                    st.session_state.live_prompts[p_name] = f.read()
+                                st.session_state.prompt_reset_counter += 1
+                                st.rerun()
+            else:
+                st.warning("No prompts found.")
+
+if selected_tab == "🚀 Pipeline":
     # --- MAIN PIPELINE VIEW ---
     if category:
         st.subheader(f"Catalog: {category}")
@@ -358,7 +445,7 @@ with main_tab1:
     else:
         st.info("Select or create a category in the sidebar to begin.")
 
-with main_tab_batch:
+elif selected_tab == "⚙️ Batch Process":
     st.write("### ⚙️ Catalog Batch Processing")
 
     if category:
@@ -429,7 +516,7 @@ with main_tab_batch:
     else:
         st.info("Select a catalog in the sidebar to use batch processing.")
 
-with main_tab_vec:
+elif selected_tab == "📦 Vector Storage":
     st.write("### 📦 Vector Storage (FAISS)")
     
     if category:
@@ -517,158 +604,7 @@ with main_tab_vec:
     else:
         st.info("Select a catalog in the sidebar to manage vector storage.")
 
-with main_tab_chat:
-    if category:
-        collections = vector_mgr.list_collections(category)
-        if collections:
-            # Top-level selectors (ChatGPT style: chat occupies the main area)
-            chat_col1, chat_col2, chat_col3 = st.columns([2, 1, 1])
-            with chat_col1:
-                selected_col_chat = st.selectbox("Select Vector Collection", collections, key="chat_col_sel")
-            with chat_col2:
-                top_k = st.slider("Context chunks (Top-K)", 1, 10, 3, key="chat_topk")
-            with chat_col3:
-                cache_mode = st.radio("Cache Mode", ["Only Positive", "Positive > Negative"], index=0, key="cache_filter")
-                cache_mode_map = {"Only Positive": "only_positive", "Positive > Negative": "pos_gt_neg"}
-                filter_val = cache_mode_map[cache_mode]
-            
-            st.markdown("---")
-            
-            # LLM Generation Settings
-            with st.expander("⚙️ LLM Generation Settings"):
-                set_col1, set_col2, set_col3 = st.columns([2, 1, 1])
-                with set_col1:
-                    sel_model = st.selectbox("LLM Model", AVAILABLE_LLM_MODELS, index=AVAILABLE_LLM_MODELS.index(DEFAULT_LLM_MODEL) if DEFAULT_LLM_MODEL in AVAILABLE_LLM_MODELS else 0)
-                with set_col2:
-                    sel_temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
-                with set_col3:
-                    sel_max_tokens = 2048 # Default fixed value
-                    with st.popover("📋 Prompty", icon="📜", use_container_width=True):
-                        st.write("### 📜 System Prompts (Live Edit)")
-                        st.info("Zmiany tutaj są tymczasowe (nie zapisują się na dysku, ale działają w tej sesji).")
-                        
-                        prompt_files = sorted(list(st.session_state.live_prompts.keys()))
-                        if prompt_files:
-                            for p_name in prompt_files:
-                                with st.expander(f"📄 {p_name}", expanded=(p_name == "rag_assistant.txt")):
-                                    # Use a dynamic key based on a counter. 
-                                    # Changing the key forces Streamlit to recreate the widget with the new default 'value'.
-                                    widget_key = f"edit_prompt_{p_name}_{st.session_state.prompt_reset_counter}"
-                                    
-                                    edited_val = st.text_area(
-                                        f"Edit {p_name}", 
-                                        value=st.session_state.live_prompts[p_name], 
-                                        height=500,
-                                        key=widget_key
-                                    )
-                                    # Update our session store with current user edits
-                                    st.session_state.live_prompts[p_name] = edited_val
-                                    
-                                    if st.button(f"🔄 Przywróć fabryczny: {p_name}", key=f"reset_{p_name}"):
-                                        p_path = Path("src/resources/prompts") / p_name
-                                        if p_path.exists():
-                                            with open(p_path, "r", encoding="utf-8") as f:
-                                                st.session_state.live_prompts[p_name] = f.read()
-                                            
-                                            # Increment counter to change key and force widget reset
-                                            st.session_state.prompt_reset_counter += 1
-                                            st.rerun()
-                        else:
-                            st.warning("No prompts found in session state.")
-            
-            st.markdown("---")
-            
-            # Chat Container for messages
-            chat_container = st.container()
-
-            # Initialize chat history
-            if "messages" not in st.session_state:
-                st.session_state.messages = []
-
-            # Display historical messages in the container
-            with chat_container:
-                for idx, message in enumerate(st.session_state.messages):
-                    with st.chat_message(message["role"]):
-                        st.markdown(message["content"])
-                        # Feedback buttons for assistant messages
-                        if message["role"] == "assistant" and "state_hash" in message:
-                            f_col1, f_col2, f_col3, _ = st.columns([1, 1, 1, 7])
-                            # We can't easily show real-time count without re-querying DB, but we can show what was saved
-                            with f_col1:
-                                if st.button("👍", key=f"up_{idx}"):
-                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "up")
-                                    st.toast("Głos oddany (pozytywny)!")
-                            with f_col2:
-                                if st.button("👎", key=f"down_{idx}"):
-                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "down")
-                                    st.toast("Głos oddany (negatywny).")
-                            
-                            # Use custom source renderer
-                            if message.get("sources"):
-                                render_styled_sources(message["sources"])
-
-            # Chat Input (Pinned to bottom by Streamlit)
-            if user_query := st.chat_input("Ask a question about your documents..."):
-                # 1. Display User Message in container
-                st.session_state.messages.append({"role": "user", "content": user_query})
-                with chat_container:
-                    with st.chat_message("user"):
-                        st.markdown(user_query)
-
-                    # 2. Display Assistant Placeholder and Stream in container
-                    with st.chat_message("assistant"):
-                        response_placeholder = st.empty()
-                        full_answer = ""
-                        sources = []
-                        current_state_hash = ""
-                        
-                        with st.spinner("Searching and thinking..."):
-                            for part in rag_mgr.answer_question_stream(
-                                category, 
-                                selected_col_chat, 
-                                user_query, 
-                                top_k=top_k, 
-                                cache_filter_mode=filter_val,
-                                model=sel_model,
-                                temperature=sel_temp,
-                                max_tokens=sel_max_tokens,
-                                custom_prompt=st.session_state.live_prompts.get("rag_assistant.txt")
-                            ):
-                                if part["type"] == "state":
-                                    current_state_hash = part["content"]
-                                elif part["type"] == "answer":
-                                    full_answer += part["content"]
-                                    response_placeholder.markdown(full_answer + "▌")
-                                elif part["type"] == "sources":
-                                    sources = part["content"]
-                        
-                        # Final update without cursor
-                        response_placeholder.markdown(full_answer)
-                        
-                        # Show sources at bottom of message using custom renderer
-                        if sources:
-                            render_styled_sources(sources)
-                        
-                        # Store in history
-                        st.session_state.messages.append({
-                            "role": "assistant", 
-                            "content": full_answer,
-                            "sources": sources,
-                            "state_hash": current_state_hash
-                        })
-                st.rerun()
-            
-            # Button for clearing
-            if st.button("🗑️ Clear Chat History"):
-                st.session_state.messages = []
-                st.rerun()
-
-        else:
-            st.warning("No vector collections found. Please create one in 'Vector Storage' tab first.")
-    else:
-        st.info("Select a catalog in the sidebar to start chatting.")
-
-with main_tab_cache:
+elif selected_tab == "📂 Cached Sets":
     st.write("### 📂 Cached Interaction Sets")
     
     # Filtering UI
@@ -715,26 +651,61 @@ with main_tab_cache:
             
             with st.expander(f"{status_text} [{row['created_at']}] {row['query'][:60]}..."):
                 st.write(f"**Category:** {row['category']} | **Collection:** {row['collection_name']} | **Model:** `{row.get('model_name', 'N/A')}`")
-                st.write("**Query:**")
+                
+                # Logic Flags Display
+                flags = []
+                if row.get('rewritten_query'): flags.append("✨ Magic Rewrite")
+                if row.get('rerank_used'): flags.append("🎯 Reranked")
+                if flags:
+                    st.write(" | ".join([f":blue[{f}]" for f in flags]))
+
+                st.write("**Original Query:**")
                 st.write(row['query'])
+                
+                if row.get('rewritten_query'):
+                    st.write("**Rewritten Query (Magic):**")
+                    st.info(row['rewritten_query'])
+
                 st.write("**Answer:**")
                 st.write(row['answer'])
                 
-                st.write("**Sources:**")
+                st.write("**Sources (Used in Answer):**")
                 try:
                     sources = json.loads(row['sources'])
-                    for s in sources:
-                        st.write(f"- {s.get('doc_name')} (ID: {s.get('id')})")
+                    render_styled_sources(sources, name="🔍 View Used Chunks")
                 except:
-                    st.write("Error loading sources metadata.")
+                    st.error("Error loading sources.")
+
+                if row.get('plausible_sources'):
+                    try:
+                        p_sources = json.loads(row['plausible_sources'])
+                        render_styled_sources(p_sources, name="🔍 View Plausible Chunks (Pre-Rerank)")
+                    except:
+                        st.error("Error loading plausible sources.")
                 
                 with st.expander("🛠️ Metadata & Prompt"):
                     st.code(f"State Hash: {row['state_hash']}", language=None)
-                    st.write("**System Prompt Version:**")
+                    
+                    st.write("**Main RAG System Prompt:**")
                     st.code(row['prompt_content'], language="markdown")
+                    
+                    if row.get('rewrite_prompt'):
+                        st.write("**Magic Rewrite Prompt:**")
+                        st.code(row['rewrite_prompt'], language="markdown")
+                        
+                    if row.get('rerank_prompt'):
+                        st.write("**Rerank Prompt (Bypass):**")
+                        st.code(row['rerank_prompt'], language="markdown")
                 
-                with st.expander("📊 Raw Data"):
-                    st.json(row)
+                with st.expander("📊 Raw Data & Debug"):
+                    st.json(dict(row))
+                    if row.get('query_embedding'):
+                        st.write("**Query Embedding (First 5):**")
+                        try:
+                            emb = json.loads(row['query_embedding'])
+                            st.write(emb[:5])
+                        except:
+                            st.write("N/A")
                 
                 # Delete button
                 if st.button(f"🗑️ Delete Entry", key=f"del_cache_{row['id']}"):
@@ -742,7 +713,7 @@ with main_tab_cache:
                     st.success("Entry deleted.")
                     st.rerun()
 
-with main_tab2:
+elif selected_tab == "📁 Global Explorer":
     st.write("### 📁 Global Status Explorer")
     
     # Filter options
@@ -786,23 +757,17 @@ with main_tab2:
                 "Conv Files": ", ".join(conv_files),
                 "Chunked": "✅" if chunk_files else "❌",
                 "Chunk Files": ", ".join(chunk_files),
-                "Created": metadata.get("created_at", "").split("T")[0] if metadata else "N/A"
+                "Created": metadata.get("created_at", "N/A") if metadata else "N/A"
             })
-    
+
     if all_data:
-        # Group by catalog for better organization
-        cat_groups = {}
-        for row in all_data:
-            cat = row["Catalog"]
-            if cat not in cat_groups:
-                cat_groups[cat] = []
-            cat_groups[cat].append(row)
-        
-        for cat, docs in cat_groups.items():
-            col_cat_header, col_cat_actions = st.columns([5, 1], vertical_alignment="center")
-            with col_cat_header:
-                st.markdown(f"#### 📁 Catalog: {cat}")
-            with col_cat_actions:
+        for cat in categories_to_show:
+            st.markdown(f"#### 📂 Catalog: {cat}")
+            docs = [d for d in all_data if d['Catalog'] == cat]
+            
+            # Action per Cat
+            c1, c2 = st.columns([4, 1])
+            with c2:
                 with st.popover("🗑️ Delete Cat", width="stretch"):
                     st.warning(f"Delete EVERYTHING in '{cat}'?")
                     if st.button("Confirm Delete Catalog", key=f"del_cat_glob_{cat}", type="primary", width="stretch"):
@@ -836,3 +801,125 @@ with main_tab2:
             st.write("---")
     else:
         st.info("No documents found in any catalog.")
+
+elif selected_tab == "💬 Chatbot":
+    if category:
+        collections = vector_mgr.list_collections(category)
+        if collections:
+            # Top-level collection selector
+            selected_col_chat = st.selectbox("Select Vector Collection", collections, key="chat_col_sel")
+            
+            st.markdown("---")
+            
+            # Chat Container for messages
+            chat_container = st.container()
+
+            # Initialize chat history
+            if "messages" not in st.session_state:
+                st.session_state.messages = []
+
+            # Display historical messages in the container
+            with chat_container:
+                for idx, message in enumerate(st.session_state.messages):
+                    with st.chat_message(message["role"]):
+                        st.markdown(message["content"])
+                        
+                        is_last = (idx == len(st.session_state.messages) - 1)
+                        # Feedback buttons only for the LAST assistant message
+                        if message["role"] == "assistant" and "state_hash" in message and is_last:
+                            f_col1, f_col2, f_col3, _ = st.columns([1, 1, 1, 7])
+                            # We can't easily show real-time count without re-querying DB, but we can show what was saved
+                            with f_col1:
+                                if st.button("👍", key=f"up_{idx}"):
+                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "up")
+                                    st.toast("Głos oddany (pozytywny)!")
+                            with f_col2:
+                                if st.button("👎", key=f"down_{idx}"):
+                                    rag_mgr.cache.update_feedback(st.session_state.messages[idx-1]["content"], message["state_hash"], "down")
+                                    st.toast("Głos oddany (negatywny).")
+                            
+                            # Use custom source renderer
+                            if message.get("sources"):
+                                render_styled_sources(message["sources"], '🔍 View Sources')
+                            
+                            # Show plausible sources if they exist (rerank was active)
+                            if message.get("plausible_sources"):
+                                render_styled_sources(message["plausible_sources"], '🔍 View Sources (Pre-Rerank)')
+
+            # Chat Input (Pinned to bottom by Streamlit)
+            if user_query := st.chat_input("Ask a question about your documents..."):
+                # 1. Display User Message in container
+                st.session_state.messages.append({"role": "user", "content": user_query})
+                with chat_container:
+                    with st.chat_message("user"):
+                        st.markdown(user_query)
+
+                    # 2. Display Assistant Placeholder and Stream in container
+                    with st.chat_message("assistant"):
+                        response_placeholder = st.empty()
+                        full_answer = ""
+                        sources = []
+                        current_state_hash = ""
+                        
+                        with st.spinner("Searching and thinking..."):
+                            plausible_sources = []
+                            for part in rag_mgr.answer_question_stream(
+                                category, 
+                                selected_col_chat, 
+                                user_query, 
+                                top_k=top_k, 
+                                cache_filter_mode=filter_val,
+                                model=sel_model,
+                                temperature=sel_temp,
+                                max_tokens=sel_max_tokens,
+                                custom_prompt=st.session_state.live_prompts.get("rag_assistant.txt"),
+                                use_reranker=use_rerank,
+                                rerank_top_n=rerank_n,
+                                custom_rerank_prompt=st.session_state.live_prompts.get("rerank_bypass.txt"),
+                                cache_threshold=cache_threshold,
+                                use_cache=cache_enabled,
+                                use_magic_rewrite=use_rewrite,
+                                custom_rewrite_prompt=st.session_state.live_prompts.get("magic_rewrite.txt")
+                            ):
+                                if part["type"] == "state":
+                                    current_state_hash = part["content"]
+                                elif part["type"] == "rewritten_query":
+                                    st.info(f"✨ **Magic Rewrite:** _{part['content']}_")
+                                elif part["type"] == "answer":
+                                    full_answer += part["content"]
+                                    response_placeholder.markdown(full_answer + "▌")
+                                elif part["type"] == "sources":
+                                    sources = part["content"]
+                                elif part["type"] == "plausible_sources":
+                                    plausible_sources = part["content"]
+                        
+                        # Final update without cursor
+                        response_placeholder.markdown(full_answer)
+                        
+                        # Show sources at bottom of message using custom renderer
+                        if sources:
+                            render_styled_sources(sources)
+                        
+                        if plausible_sources:
+                            with st.expander("🔍 Plausible Sources (Pre-Rerank)"):
+                                render_styled_sources(plausible_sources)
+                        
+                        # Store in history
+                        st.session_state.messages.append({
+                            "role": "assistant", 
+                            "content": full_answer,
+                            "sources": sources,
+                            "plausible_sources": plausible_sources,
+                            "state_hash": current_state_hash
+                        })
+                st.rerun()
+            
+            # Button for clearing
+            if st.button("🗑️ Clear Chat History"):
+                st.session_state.messages = []
+                st.rerun()
+
+        else:
+            st.warning("No vector collections found. Please create one in 'Vector Storage' tab first.")
+    else:
+        st.info("Select a catalog in the sidebar to start chatting.")

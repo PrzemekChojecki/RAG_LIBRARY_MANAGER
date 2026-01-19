@@ -172,15 +172,24 @@ def apply_custom_styles():
             font-size: 0.875rem !important;
             font-weight: 500 !important;
         }
+
+        /* Large Popover for Prompt Editing */
+        div[data-testid="stPopoverBody"] {
+            min-width: 70vw !important;
+            max-width: 90vw !important;
+            padding: 2rem !important;
+            background-color: var(--secondary-bg) !important;
+            border: 1px solid var(--glass-border) !important;
+        }
     </style>
     """, unsafe_allow_html=True)
 
-def render_styled_sources(sources):
+def render_styled_sources(sources, name="🔍 View Sources"):
     """Renders sources using a cleaner, more visual layout."""
     if not sources:
         return
     
-    with st.expander("🔍 View Sources", expanded=False):
+    with st.expander(name, expanded=False):
         for i, s in enumerate(sources):
             score_val = s.get('score', 0)
             st.markdown(f"""

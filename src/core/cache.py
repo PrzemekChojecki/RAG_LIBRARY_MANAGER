@@ -4,6 +4,7 @@ import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
+import numpy as np
 from .config import RAG_CACHE_DB
 
 class RAGCache:
@@ -48,6 +49,18 @@ class RAGCache:
             cursor.execute('ALTER TABLE rag_cache ADD COLUMN hit_count INTEGER DEFAULT 0')
         if 'model_name' not in columns:
             cursor.execute('ALTER TABLE rag_cache ADD COLUMN model_name TEXT')
+        if 'query_embedding' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN query_embedding TEXT')
+        if 'rewritten_query' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN rewritten_query TEXT')
+        if 'rerank_used' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN rerank_used INTEGER DEFAULT 0')
+        if 'plausible_sources' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN plausible_sources TEXT')
+        if 'rerank_prompt' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN rerank_prompt TEXT')
+        if 'rewrite_prompt' not in columns:
+            cursor.execute('ALTER TABLE rag_cache ADD COLUMN rewrite_prompt TEXT')
             
         # Drop old unused columns if they exist
         for col_to_drop in ['feedback', 'rating_comment']:
@@ -74,52 +87,109 @@ class RAGCache:
         state_str = json.dumps(state_data, sort_keys=True)
         return hashlib.sha256(state_str.encode()).hexdigest()
 
-    def check_cache(self, query: str, state_hash: str, filter_mode: str = "only_positive") -> Optional[Dict[str, Any]]:
-        """Checks if a query exists for the given state, with filtered quality logic."""
+    def check_cache(self, query: str, state_hash: str, filter_mode: str = "only_positive", query_embedding: Optional[List[float]] = None, threshold: float = 0.95) -> Optional[Dict[str, Any]]:
+        """Checks if a query exists for the given state, supporting semantic similarity."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         
-        # Build SQL condition based on mode
+        # 1. First try exact match (fast)
         if filter_mode == "only_positive":
             condition = "coalesce(thumbs_up, 0) > 0 and coalesce(thumbs_down, 0) = 0"
         elif filter_mode == "pos_gt_neg":
             condition = "coalesce(thumbs_up, 0) > coalesce(thumbs_down, 0)"
         else:
-            condition = "1=1" # No filter (return latest)
+            condition = "1 = 1"
 
         cursor.execute(f'''
-            SELECT id, answer, sources FROM rag_cache 
+            SELECT id, query, answer, sources FROM rag_cache 
             WHERE query = ? AND state_hash = ? AND {condition}
             ORDER BY created_at DESC LIMIT 1
         ''', (query.strip(), state_hash))
         
         row = cursor.fetchone()
-        
         if row:
-            # Increment hit counter
             cursor.execute('UPDATE rag_cache SET hit_count = hit_count + 1 WHERE id = ?', (row["id"],))
             conn.commit()
-            
             result = {
-                "answer": row["answer"],
-                "sources": json.loads(row["sources"])
+                "query": row["query"],
+                "answer": row["answer"], 
+                "sources": json.loads(row["sources"]),
+                "similarity": 1.0
             }
             conn.close()
             return result
-        
+
+        # 2. Semantic Search fallback
+        if query_embedding and threshold < 1.0:
+            cursor.execute(f'''
+                SELECT id, query, query_embedding, answer, sources FROM rag_cache 
+                WHERE state_hash = ? AND {condition} AND query_embedding IS NOT NULL
+            ''', (state_hash,))
+            
+            candidates = cursor.fetchall()
+            best_match = None
+            max_sim = -1.0
+            
+            vec_a = np.array(query_embedding)
+            norm_a = np.linalg.norm(vec_a)
+            
+            for cand in candidates:
+                try:
+                    vec_b = np.array(json.loads(cand["query_embedding"]))
+                    dot = np.dot(vec_a, vec_b)
+                    norm_b = np.linalg.norm(vec_b)
+                    similarity = dot / (norm_a * norm_b) if (norm_a * norm_b) > 0 else 0
+                    
+                    if similarity >= threshold and similarity > max_sim:
+                        max_sim = similarity
+                        best_match = cand
+                except:
+                    continue
+            
+            if best_match:
+                cursor.execute('UPDATE rag_cache SET hit_count = hit_count + 1 WHERE id = ?', (best_match["id"],))
+                conn.commit()
+                result = {
+                    "query": best_match["query"],
+                    "answer": best_match["answer"],
+                    "sources": json.loads(best_match["sources"]),
+                    "similarity": float(max_sim)
+                }
+                conn.close()
+                return result
+
         conn.close()
         return None
 
-    def save_to_cache(self, query: str, answer: str, sources: List[Dict[str, Any]], state_hash: str, category: str, collection_name: str, prompt_content: str, model_name: str = ""):
-        """Saves a new interaction to the cache."""
+    def save_to_cache(self, query: str, answer: str, sources: List[Dict[str, Any]], state_hash: str, category: str, collection_name: str, prompt_content: str, model_name: str = "", query_embedding: Optional[List[float]] = None, rewritten_query: Optional[str] = None, rerank_used: bool = False, plausible_sources: Optional[List[Dict[str, Any]]] = None, rerank_prompt: Optional[str] = None, rewrite_prompt: Optional[str] = None):
+        """Saves a new interaction to the cache with prompt metadata."""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
         cursor.execute('''
-            INSERT INTO rag_cache (query, answer, sources, state_hash, category, collection_name, prompt_content, model_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (query.strip(), answer, json.dumps(sources), state_hash, category, collection_name, prompt_content, model_name))
+            INSERT INTO rag_cache (
+                query, answer, sources, state_hash, category, collection_name, 
+                prompt_content, model_name, query_embedding, rewritten_query, 
+                rerank_used, plausible_sources, rerank_prompt, rewrite_prompt
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            query.strip(), 
+            answer, 
+            json.dumps(sources), 
+            state_hash, 
+            category, 
+            collection_name, 
+            prompt_content, 
+            model_name, 
+            json.dumps(query_embedding) if query_embedding else None,
+            rewritten_query,
+            1 if rerank_used else 0,
+            json.dumps(plausible_sources) if plausible_sources else None,
+            rerank_prompt,
+            rewrite_prompt
+        ))
         
         conn.commit()
         conn.close()

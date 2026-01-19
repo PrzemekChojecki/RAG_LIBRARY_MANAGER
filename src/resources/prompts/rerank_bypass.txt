@@ -1,0 +1,14 @@
+Sprawdź poniższe fragmenty dokumentów pod kątem ich przydatności do odpowiedzi na zapytanie użytkownika.
+Wybierz maksymalnie {{top_n}} najbardziej istotnych fragmentów i zwróć ich numery ID jako listę JSON.
+
+ZAPYTANIE UŻYTKOWNIKA: {{query}}
+
+FRAGMENTY DOKUMENTÓW DO OCENY:
+{{documents}}
+
+Zasady:
+1. Zwróć WYŁĄCZNIE poprawny format JSON wg schematu: {"top_indices": [indeks1, indeks2, ...]}.
+2. Indeksy odnoszą się do kolejności fragmentów poniżej (start od 0).
+3. Wybieraj tylko te, które realnie zawierają informacje pomocne w odpowiedzi.
+
+ODPOWIEDŹ (JSON):
