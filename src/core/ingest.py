@@ -28,14 +28,14 @@ class IngestManager:
             return False, f"Category '{category}' has reached the limit of {DEFAULT_MAX_DOCS_PER_CATEGORY} documents."
 
         # Unique name check
-        doc_name = Path(filename).stem
+        doc_name = self.storage.sanitize_component(Path(filename).stem, max_length=50)
         if doc_name in existing_docs:
             return False, f"Document '{doc_name}' already exists in category '{category}'."
 
         return True, ""
 
     def process_upload(self, category: str, filename: str, file_content: bytes) -> Tuple[bool, str]:
-        doc_name = Path(filename).stem
+        doc_name = self.storage.sanitize_component(Path(filename).stem, max_length=50)
         
         # Check if exists first to inform user
         existing_docs = self.storage.list_documents(category)
@@ -49,12 +49,14 @@ class IngestManager:
         return self._ingest(category, filename, file_content)
 
     def _ingest(self, category: str, filename: str, file_content: bytes) -> Tuple[bool, str]:
-        doc_name = Path(filename).stem
+        doc_name = self.storage.sanitize_component(Path(filename).stem, max_length=50)
         # Ensure directory structure
         paths = self.storage.ensure_document_structure(category, doc_name)
         
-        # Save original file
-        original_path = paths["original"] / filename
+        # Save original file with a shortened name to avoid path limits
+        ext = Path(filename).suffix
+        local_filename = f"source{ext}"
+        original_path = paths["original"] / local_filename
         with open(original_path, "wb") as f:
             f.write(file_content)
 

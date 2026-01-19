@@ -145,12 +145,29 @@ class RAGCache:
         conn.commit()
         conn.close()
 
-    def list_cache(self) -> List[Dict[str, Any]]:
-        """Returns all entries from the cache."""
+    def list_cache(self, category: Optional[str] = None, collection_name: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Returns entries from the cache with optional filtering."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
-        cursor.execute('SELECT * FROM rag_cache ORDER BY created_at DESC')
+        
+        query = 'SELECT * FROM rag_cache'
+        params = []
+        conditions = []
+        
+        if category:
+            conditions.append('category = ?')
+            params.append(category)
+        if collection_name:
+            conditions.append('collection_name = ?')
+            params.append(collection_name)
+            
+        if conditions:
+            query += ' WHERE ' + ' AND '.join(conditions)
+        
+        query += ' ORDER BY created_at DESC'
+        
+        cursor.execute(query, params)
         rows = [dict(row) for row in cursor.fetchall()]
         conn.close()
         return rows
@@ -160,5 +177,13 @@ class RAGCache:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         cursor.execute('DELETE FROM rag_cache WHERE id = ?', (entry_id,))
+        conn.commit()
+        conn.close()
+
+    def purge_all(self):
+        """Deletes all entries from the cache."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM rag_cache')
         conn.commit()
         conn.close()

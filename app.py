@@ -33,6 +33,18 @@ import json
 if "uploader_key" not in st.session_state:
     st.session_state.uploader_key = 0
 
+if "prompt_reset_counter" not in st.session_state:
+    st.session_state.prompt_reset_counter = 0
+
+# Initialize prompt state if not present
+if "live_prompts" not in st.session_state:
+    st.session_state.live_prompts = {}
+    prompt_dir = Path("src/resources/prompts")
+    if prompt_dir.exists():
+        for p_file in prompt_dir.glob("*.txt"):
+            with open(p_file, "r", encoding="utf-8") as f:
+                st.session_state.live_prompts[p_file.name] = f.read()
+
 # Initialize Managers
 storage = StorageManager()
 ingest = IngestManager(storage)
@@ -68,7 +80,7 @@ st.title("📚 RAG Manager")
 # st.markdown("Automated Document Ingestion & Chunking Pipeline")
 
 # Top-level Navigation
-main_tab1, main_tab_batch, main_tab_vec, main_tab2, main_tab_chat, main_tab_cache = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📦 Vector Storage", "📁 Global Explorer", "💬 Chatbot", "📂 Cached Sets"])
+main_tab1, main_tab_batch, main_tab2, main_tab_vec, main_tab_chat, main_tab_cache = st.tabs(["🚀 Pipeline", "⚙️ Batch Process", "📁 Global Explorer", "📦 Vector Storage", "💬 Chatbot", "📂 Cached Sets"])
 
 # --- SIDEBAR ---
 with st.sidebar:
@@ -81,7 +93,8 @@ with st.sidebar:
         new_cat = st.text_input("New Catalog Name")
         if st.button("Create Catalog"):
             if new_cat:
-                (storage.root_path / new_cat).mkdir(exist_ok=True)
+                safe_cat = storage.sanitize_component(new_cat, 30)
+                (storage.root_path / safe_cat).mkdir(exist_ok=True)
                 st.rerun()
             else:
                 st.error("Enter a name")
@@ -213,7 +226,8 @@ with main_tab1:
                 col1, col2 = st.columns([1, 1])
                 
                 with col1:
-                    st.info(f"**ID:** {metadata['document_id']}\n\n**Size:** {metadata['file_size_mb']} MB")
+                    orig_name = metadata.get('original_filename', selected_doc)
+                    st.info(f"**File:** {orig_name}\n\n**ID:** {metadata['document_id']}\n\n**Size:** {metadata['file_size_mb']} MB")
                     
                     # ... (Conversion and Chunking buttons)
                     st.write("---")
@@ -437,9 +451,8 @@ with main_tab_vec:
                 if chunk_dir.exists():
                     chunk_files = [f.name for f in chunk_dir.glob("*.md")]
                     if chunk_files:
-                        # For now, let's just pick the latest chunk run for each doc or allow selecting
-                        # To keep it simple, we'll offer a multiselect for each doc's chunk runs
-                        selected = st.multiselect(f"Chunks for {d}:", chunk_files, key=f"v_sel_{d}")
+                        # Pre-select the first one by default to speed up UI
+                        selected = st.multiselect(f"Chunks for {d}:", chunk_files, default=[chunk_files[0]], key=f"v_sel_{d}")
                         for s in selected:
                             selected_chunks_to_include.append((d, s))
             
@@ -523,13 +536,45 @@ with main_tab_chat:
             
             # LLM Generation Settings
             with st.expander("⚙️ LLM Generation Settings"):
-                set_col1, set_col2, set_col3 = st.columns(3)
+                set_col1, set_col2, set_col3 = st.columns([2, 1, 1])
                 with set_col1:
                     sel_model = st.selectbox("LLM Model", AVAILABLE_LLM_MODELS, index=AVAILABLE_LLM_MODELS.index(DEFAULT_LLM_MODEL) if DEFAULT_LLM_MODEL in AVAILABLE_LLM_MODELS else 0)
                 with set_col2:
                     sel_temp = st.slider("Temperature", 0.0, 1.0, 0.2, 0.05)
                 with set_col3:
-                    sel_max_tokens = st.slider("Max Tokens", 256, 4096, 1000, 256)
+                    sel_max_tokens = 2048 # Default fixed value
+                    with st.popover("📋 Prompty", icon="📜", use_container_width=True):
+                        st.write("### 📜 System Prompts (Live Edit)")
+                        st.info("Zmiany tutaj są tymczasowe (nie zapisują się na dysku, ale działają w tej sesji).")
+                        
+                        prompt_files = sorted(list(st.session_state.live_prompts.keys()))
+                        if prompt_files:
+                            for p_name in prompt_files:
+                                with st.expander(f"📄 {p_name}", expanded=(p_name == "rag_assistant.txt")):
+                                    # Use a dynamic key based on a counter. 
+                                    # Changing the key forces Streamlit to recreate the widget with the new default 'value'.
+                                    widget_key = f"edit_prompt_{p_name}_{st.session_state.prompt_reset_counter}"
+                                    
+                                    edited_val = st.text_area(
+                                        f"Edit {p_name}", 
+                                        value=st.session_state.live_prompts[p_name], 
+                                        height=500,
+                                        key=widget_key
+                                    )
+                                    # Update our session store with current user edits
+                                    st.session_state.live_prompts[p_name] = edited_val
+                                    
+                                    if st.button(f"🔄 Przywróć fabryczny: {p_name}", key=f"reset_{p_name}"):
+                                        p_path = Path("src/resources/prompts") / p_name
+                                        if p_path.exists():
+                                            with open(p_path, "r", encoding="utf-8") as f:
+                                                st.session_state.live_prompts[p_name] = f.read()
+                                            
+                                            # Increment counter to change key and force widget reset
+                                            st.session_state.prompt_reset_counter += 1
+                                            st.rerun()
+                        else:
+                            st.warning("No prompts found in session state.")
             
             st.markdown("---")
             
@@ -586,7 +631,8 @@ with main_tab_chat:
                                 cache_filter_mode=filter_val,
                                 model=sel_model,
                                 temperature=sel_temp,
-                                max_tokens=sel_max_tokens
+                                max_tokens=sel_max_tokens,
+                                custom_prompt=st.session_state.live_prompts.get("rag_assistant.txt")
                             ):
                                 if part["type"] == "state":
                                     current_state_hash = part["content"]
@@ -625,11 +671,38 @@ with main_tab_chat:
 with main_tab_cache:
     st.write("### 📂 Cached Interaction Sets")
     
-    cached_data = rag_mgr.cache.list_cache()
+    # Filtering UI
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        f_categories = storage.list_categories()
+        sel_f_cat = st.selectbox("Filter by Catalog", ["All"] + f_categories, key="f_cat_sel")
+    
+    with filter_col2:
+        if sel_f_cat != "All":
+            f_collections = vector_mgr.list_collections(sel_f_cat)
+            sel_f_col = st.selectbox("Filter by Collection", ["All"] + f_collections, key="f_col_sel")
+        else:
+            sel_f_col = "All"
+            st.selectbox("Filter by Collection", ["All"], disabled=True, key="f_col_sel_disabled")
+
+    # Fetch data based on filters
+    query_cat = sel_f_cat if sel_f_cat != "All" else None
+    query_col = sel_f_col if sel_f_col != "All" else None
+    cached_data = rag_mgr.cache.list_cache(category=query_cat, collection_name=query_col)
     
     if not cached_data:
         st.info("No interactions recorded in cache yet.")
     else:
+        # Purge All option
+        c1, c2 = st.columns([6, 1])
+        with c2:
+            with st.popover("🔥 Purge All", width="stretch"):
+                st.warning("Are you sure? This will delete ALL cached entries forever!")
+                if st.button("Confirm Purge", type="primary", width="stretch"):
+                    rag_mgr.cache.purge_all()
+                    st.success("Cache purged.")
+                    st.rerun()
+
         # Summary statistics
         st.write(f"Total entries: {len(cached_data)}")
         
@@ -726,7 +799,16 @@ with main_tab2:
             cat_groups[cat].append(row)
         
         for cat, docs in cat_groups.items():
-            st.markdown(f"#### 📁 Catalog: {cat}")
+            col_cat_header, col_cat_actions = st.columns([5, 1], vertical_alignment="center")
+            with col_cat_header:
+                st.markdown(f"#### 📁 Catalog: {cat}")
+            with col_cat_actions:
+                with st.popover("🗑️ Delete Cat", width="stretch"):
+                    st.warning(f"Delete EVERYTHING in '{cat}'?")
+                    if st.button("Confirm Delete Catalog", key=f"del_cat_glob_{cat}", type="primary", width="stretch"):
+                        storage.delete_category(cat)
+                        st.rerun()
+
             for doc in docs:
                 status_icons = f"{doc['Converted']} MD | {doc['Chunked']} CH"
                 with st.expander(f"{status_icons} 📄 {doc['Document']}"):
@@ -735,6 +817,11 @@ with main_tab2:
                         st.write("**Metadata**")
                         st.write(f"- Size: {doc['Size (MB)']} MB")
                         st.write(f"- Created: {doc['Created']}")
+                        
+                        if st.button("🗑️ Delete Document", key=f"del_doc_glob_{cat}_{doc['Document']}", type="secondary"):
+                            storage.delete_document(cat, doc['Document'])
+                            st.rerun()
+                            
                     with col2:
                         st.write("**Generated Files**")
                         if doc['Conv Files']:

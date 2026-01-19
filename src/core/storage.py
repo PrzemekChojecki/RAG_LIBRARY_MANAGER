@@ -1,9 +1,24 @@
 import json
+import re
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any
 from .config import DATA_ROOT, ARCHIVE_ROOT
 
 class StorageManager:
+    @staticmethod
+    def sanitize_component(name: str, max_length: int = 50) -> str:
+        """Sanitizes and shortens a path component (dir or file name)."""
+        # Remove unsafe characters
+        clean = re.sub(r'[<>:"/\\|?*]', '_', name)
+        if len(clean) <= max_length:
+            return clean
+        
+        # Shorten and append hash
+        hash_part = hashlib.md5(name.encode()).hexdigest()[:8]
+        keep = max_length - 9 # room for _ and 8 chars hash
+        return clean[:keep] + "_" + hash_part
+
     def __init__(self, root_path: Path = DATA_ROOT):
         self.root_path = root_path
         self.root_path.mkdir(exist_ok=True)
@@ -58,6 +73,12 @@ class StorageManager:
         if doc_dir.exists():
             shutil.rmtree(doc_dir)
 
+    def delete_category(self, category: str):
+        import shutil
+        cat_dir = self.root_path / category
+        if cat_dir.exists():
+            shutil.rmtree(cat_dir)
+
     def archive_document(self, category: str, doc_name: str) -> str:
         import shutil
         from datetime import datetime
@@ -67,7 +88,10 @@ class StorageManager:
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Use double underscore for safer parsing
-        archive_name = f"{category}__{doc_name}__{timestamp}"
+        # Sanitize components to stay within path limits
+        s_cat = self.sanitize_component(category, 30)
+        s_doc = self.sanitize_component(doc_name, 50)
+        archive_name = f"{s_cat}__{s_doc}__{timestamp}"
         archive_path = ARCHIVE_ROOT / archive_name
         
         shutil.make_archive(str(archive_path), 'zip', str(doc_dir))

@@ -156,7 +156,8 @@ class VectorStoreManager:
             index.add(embeddings)
 
             # Save everything
-            collection_dir = self.storage.root_path / category / "_vector_stores" / collection_name
+            safe_col_name = self.storage.sanitize_component(collection_name, 50)
+            collection_dir = self.storage.root_path / category / "_vector_stores" / safe_col_name
             collection_dir.mkdir(parents=True, exist_ok=True)
 
             # Save index

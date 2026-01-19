@@ -49,12 +49,14 @@ class RAGManager:
         
         return "\n\n---\n\n".join(context_parts)
 
-    def answer_question_stream(self, category: str, collection_name: str, query: str, top_k: int = 3, cache_filter_mode: str = "only_positive", model: str = DEFAULT_LLM_MODEL, temperature: float = 0.2, max_tokens: int = 1000):
+    def answer_question_stream(self, category: str, collection_name: str, query: str, top_k: int = 3, cache_filter_mode: str = "only_positive", model: str = DEFAULT_LLM_MODEL, temperature: float = 0.2, max_tokens: int = 1000, custom_prompt: Optional[str] = None):
         """Performs search and returns a generator for streaming the answer."""
         
         # 1. Load context state
         prompt_content = ""
-        if self.prompt_path.exists():
+        if custom_prompt:
+            prompt_content = custom_prompt
+        elif self.prompt_path.exists():
             with open(self.prompt_path, "r", encoding="utf-8") as f:
                 prompt_content = f.read()
         
